@@ -1,0 +1,51 @@
+﻿草图大师（SketchUp）动态组件尺寸显示毫米补丁
+适用：SketchUp 2024 / 2025 / 2026 自带的「动态组件」扩展
+更新：2026-10-30
+
+一、这个补丁改了什么
+把「动态组件」面板里长度单位的默认显示改成毫米；
+左上角那把尺子按钮改成 厘米 <-> 毫米 两档循环，英寸不再出现在面板里；
+去掉点尺子时弹出来的确认框。
+只影响动态组件面板的显示方式和裸数字的解释单位，
+不改模型信息里的单位，也不改你已有组件的实际尺寸。
+
+二、换电脑怎么装（3 步）
+1. 把整个「草图大师动态组件毫米补丁」文件夹拷过去（U 盘、微信文件传输助手都行）。
+   放桌面、放 D 盘都可以，位置不重要，文件夹名也可以自己改。
+2. 完全退出 SketchUp（不是关窗口，要确认进程没了）。
+3. 双击「安装-尺寸改毫米.bat」，按一个键继续，看窗口里的绿字。
+   - 弹出「用户账户控制」点 是（SketchUp 装在 Program Files 时必须要）。
+   - 每一行出现绿色的 patched 或 already 就是成功，然后正常打开 SketchUp。
+
+三、怎么验证生效
+打开任意 .skp，点一个动态组件，看「动态组件」面板：
+尺寸数字后面直接是 mm；点尺子图标在 cm 和 mm 之间切换，
+不弹确认框，也不会再出现英寸。
+
+四、出现黄字怎么办
+- 「这个版本的代码结构和本机不一样」：那台电脑的动态组件扩展版本不同，
+  工具为了不改坏，那个目录一个字节都没动。把它的
+  ...\ShippedExtensions\su_dynamiccomponents\js\components.js
+  拷回来发给作者（GitHub: legercong），适配后再给新包。
+- 「没有找到动态组件扩展目录」：SketchUp 装在很偏的位置，
+  把安装目录（例如 D:\SketchUp\SketchUp 2026）发给我。
+- 权限报错：右键「安装-尺寸改毫米.bat」-> 以管理员身份运行，再试一次。
+
+五、想改回原厂状态
+双击「还原-改回原版.bat」。它用补丁存在扩展目录里的 _backup_dc_mm 还原。
+如果那个备份被删了，可以用本文件夹里的「原文件备份」手动覆盖：
+  原文件备份\js\components.js  ->  su_dynamiccomponents\js\components.js
+  原文件备份\js\manager.js     ->  su_dynamiccomponents\js\manager.js
+  原文件备份\css\manager.css   ->  su_dynamiccomponents\css\manager.css
+  并删掉 su_dynamiccomponents\images\units_mm.gif
+「原文件备份」是 2026 版（26.0.429）的原厂文件，只在同版本机器上用；
+版本不同请直接用 SketchUp 重装动态组件扩展。
+
+六、有两份扩展目录都要改（工具已经自动处理）
+  C 盘 ...\AppData\Roaming\SketchUp\SketchUp 20XX\SketchUp\Plugins\su_dynamiccomponents
+  安装目录 ...\SketchUp\ShippedExtensions\su_dynamiccomponents
+哪一份生效由 SketchUp 决定，所以两份一起改，不管加载哪个都是毫米。
+
+七、SketchUp 升级或重装扩展之后
+扩展文件会回到原厂状态，补丁被覆盖。
+重新双击「安装-尺寸改毫米.bat」跑一次就行，不用重装本工具。
