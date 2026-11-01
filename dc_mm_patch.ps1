@@ -73,15 +73,16 @@ function Sub-Text($text, $old, $new) { if ($text.Contains($old)) { return $text.
 function Test-Patched($dir) {
   $path = Join-Path $dir 'js\components.js'
   if (-not (Test-Path $path)) { return $false }
-  return (Read-Text $path) -match "su\.ifEmpty\(lengthUnits, 'MILLIMETERS'\)"
+  return (Read-Text $path).Contains("'_lengthunits_user'")
 }
 
 function Test-Anchor($dir) {
   $path = Join-Path $dir 'js\components.js'
   if (-not (Test-Path $path)) { return $false }
   $text = Read-Text $path
-  return $text.Contains("lengthUnits = su.ifEmpty(lengthUnits, 'INCHES');") -or
-         ($text -match "su\.ifEmpty\(lengthUnits, 'MILLIMETERS'\)")
+  return $text.Contains("'_lengthunits_user'") -or
+         $text.Contains("su.ifEmpty(lengthUnits, 'MILLIMETERS');") -or
+         $text.Contains("lengthUnits = su.ifEmpty(lengthUnits, 'INCHES');")
 }
 
 function Back-Up($dir, $alreadyPatched) {
@@ -101,19 +102,25 @@ function Back-Up($dir, $alreadyPatched) {
 function Patch-Components($dir) {
   $path = Join-Path $dir 'js\components.js'
   $text = Read-Text $path
-  if ($text -match "su\.ifEmpty\(lengthUnits, 'MILLIMETERS'\)") { return 'already' }
-  $pattern = "lengthUnits = su.ifEmpty(lengthUnits, 'INCHES');"
-  if (-not $text.Contains($pattern)) { return 'MISSING' }
+  if ($text.Contains("'_lengthunits_user'")) { return 'already' }
+  $pattern = '(?s)comp\.lengthUnits = function\(entity\) \{.*?\};'
+  $match = [regex]::Match($text, $pattern)
+  if (-not $match.Success) { return 'MISSING' }
   $replacement = @(
-    "lengthUnits = su.ifEmpty(lengthUnits, 'MILLIMETERS');",
-    '  // Legacy authored components default to inches, which is never wanted here.',
-    "  if (lengthUnits == 'INCHES') {",
-    "    lengthUnits = 'MILLIMETERS';",
-    '  }'
+    'comp.lengthUnits = function(entity) {',
+    '  // Only the unit picked with the units button is honoured. Anything',
+    '  // authored into the component (inches or centimeters) shows as millimeters.',
+    "  var chosenUnits = comp.getAttributeValue(entity, '_lengthunits_user');",
+    "  if (chosenUnits == 'CENTIMETERS' || chosenUnits == 'MILLIMETERS') {",
+    '    return chosenUnits;',
+    '  }',
+    "  return 'MILLIMETERS';",
+    '};'
   ) -join "`r`n"
+  $text = $text.Remove($match.Index, $match.Length).Insert($match.Index, $replacement)
   $text = Sub-Text $text " * Returns the lengthUnits attached to a given entity, defaulting to INCHES." " * Returns the lengthUnits attached to a given entity, defaulting to`r`n * MILLIMETERS."
   $text = Sub-Text $text ' * @return {string} The units string, such as INCHES or CENTIMETERS.' ' * @return {string} The units string, such as MILLIMETERS or CENTIMETERS.'
-  Write-Text $path $text.Replace($pattern, $replacement)
+  Write-Text $path $text
   return 'patched'
 }
 
@@ -122,33 +129,72 @@ function Patch-Manager($dir) {
   $text = Read-Text $path
   $report = @()
 
-  $togglePattern = "(?s)var newUnits;\s*if\s*\(lengthUnits == 'INCHES'\)\s*\{\s*newUnits = 'CENTIMETERS';\s*\}\s*else\s*\{\s*newUnits = 'INCHES';\s*\}"
+  # 尺子按钮：原版在英寸/厘米之间跳，改成厘米/毫米，并把这次选择记下来
+  $togglePattern = @(
+    '(?s)var newUnits;',
+    "if\s*\(lengthUnits == '(?:INCHES|CENTIMETERS)'\)",
+    '\{',
+    "newUnits = '(?:CENTIMETERS|MILLIMETERS)';",
+    '\}',
+    'else',
+    '\{',
+    "newUnits = '(?:INCHES|CENTIMETERS)';",
+    '\}',
+    "\$\('units-button'\)\.className = 'units-button-' \+ newUnits\.toLowerCase\(\);",
+    "comp\.setAttributeValue\(entity, '_lengthunits', newUnits\);"
+  ) -join '\s*'
   $toggleReplacement = @(
     'var newUnits;',
     "  if (lengthUnits == 'CENTIMETERS') {",
     "    newUnits = 'MILLIMETERS';",
     '  } else {',
     "    newUnits = 'CENTIMETERS';",
-    '  }'
+    '  }',
+    "  `$('units-button').className = 'units-button-' + newUnits.toLowerCase();",
+    "  comp.setAttributeValue(entity, '_lengthunits', newUnits);",
+    '  // The stored unit of a component is often centimeters already, so the',
+    "  // panel remembers an explicit choice separately in '_lengthunits_user'.",
+    "  comp.setAttributeValue(entity, '_lengthunits_user', newUnits);"
   ) -join "`r`n"
-  if ([regex]::IsMatch($text, $togglePattern)) {
-    $text = [regex]::Replace($text, $togglePattern, $toggleReplacement)
+  $match = [regex]::Match($text, $togglePattern)
+  if ($match.Success) {
+    $text = $text.Remove($match.Index, $match.Length).Insert($match.Index, $toggleReplacement)
     $report += 'toggle=patched'
-  } elseif ($text -match "if \(lengthUnits == 'CENTIMETERS'\)") {
+  } elseif ($text.Contains("comp.setAttributeValue(entity, '_lengthunits_user', newUnits);")) {
     $report += 'toggle=already'
   } else {
     $report += 'toggle=MISSING'
   }
 
+  # 新增的键也要推给 Ruby 侧，否则重新选组件后记忆会丢
+  $pushPattern = "comp\.pushAttribute\(entity, '_lengthunits', 'mgr\.redraw'\);"
+  $pushReplacement = @(
+    "comp.pushAttribute(entity, '_lengthunits_user');",
+    "  comp.pushAttribute(entity, '_lengthunits', 'mgr.redraw');"
+  ) -join "`r`n"
+  $match = [regex]::Match($text, $pushPattern)
+  if ($match.Success) {
+    $text = $text.Remove($match.Index, $match.Length).Insert($match.Index, $pushReplacement)
+    $report += 'push=patched'
+  } elseif ($text.Contains("comp.pushAttribute(entity, '_lengthunits_user');")) {
+    $report += 'push=already'
+  } else {
+    $report += 'push=MISSING'
+  }
+
+  # 点尺子时的确认框：直接放行
   $confirmPattern = "(?s)mgr\.confirmUnitsChange = function\(\)\s*\{.*?\};"
   $confirmReplacement = "mgr.confirmUnitsChange = function() {`r`n  return true;`r`n};"
   if ([regex]::IsMatch($text, "(?s)mgr\.confirmUnitsChange = function\(\)\s*\{\s*return true;\s*\};")) {
     $report += 'confirm=already'
-  } elseif ([regex]::IsMatch($text, $confirmPattern)) {
-    $text = [regex]::Replace($text, $confirmPattern, $confirmReplacement)
-    $report += 'confirm=patched'
   } else {
-    $report += 'confirm=MISSING'
+    $match = [regex]::Match($text, $confirmPattern)
+    if ($match.Success) {
+      $text = $text.Remove($match.Index, $match.Length).Insert($match.Index, $confirmReplacement)
+      $report += 'confirm=patched'
+    } else {
+      $report += 'confirm=MISSING'
+    }
   }
 
   $text = Sub-Text $text '// Get our length units for this entity, defaulting to inches.' '// Get our length units for this entity, defaulting to millimeters.'
@@ -194,7 +240,8 @@ function Restore-One($dir) {
   $bk = Join-Path $dir $backupDirName
   if (-not (Test-Path $bk)) { Write-Host "  没有备份，跳过：$dir" -ForegroundColor Yellow; return }
   $probe = Join-Path $bk 'js\components.js'
-  if ((Test-Path $probe) -and ((Read-Text $probe) -match "su\.ifEmpty\(lengthUnits, 'MILLIMETERS'\)")) {
+  if ((Test-Path $probe) -and ((Read-Text $probe).Contains("'_lengthunits_user'") -or
+      (Read-Text $probe).Contains("su.ifEmpty(lengthUnits, 'MILLIMETERS');"))) {
     Write-Host "  备份不可用：里面的文件已经带毫米补丁，还原它没有意义。" -ForegroundColor Red
     Write-Host "  位置：$bk" -ForegroundColor Red
     Write-Host '  要恢复原厂状态，请重新安装动态组件扩展（或重装 SketchUp）。' -ForegroundColor Yellow
